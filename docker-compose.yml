@@ -1,0 +1,107 @@
+version: '2.1'
+
+networks:
+  monitor-net:
+    driver: bridge
+
+volumes:
+    prometheus_data: {}
+
+services:
+  pg_prometheus:
+    image: timescale/pg_prometheus:latest
+    command: -c synchronous_commit=OFF
+    container_name: pg_prometheus
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 1s
+      timeout: 5s  
+      retries: 10
+    networks:
+      - monitor-net
+    restart: unless-stopped
+  prometheus_postgresql_adapter:
+    image: timescale/prometheus-postgresql-adapter:latest
+    ports:
+      - "9201:9201"
+    depends_on:
+      pg_prometheus:
+        condition: service_healthy
+    command: "-pg.host=pg_prometheus -pg.password=postgres -pg.prometheus-log-samples"
+    networks:
+      - monitor-net
+    restart: unless-stopped
+  pgadmin:
+    container_name: pgadmin_container
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-pgadmin4@pgadmin.org}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+    ports:
+      - "81:80"
+    networks:
+      - monitor-net
+    restart: unless-stopped
+  node_exporter:
+    image: quay.io/prometheus/node-exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - monitor-net
+    restart: unless-stopped
+  flask-prometheus-example:
+    container_name: flask-prometheus
+    ports:
+      - "5100:5100"
+      - "8000:8000"
+    expose:
+      - 8000
+      - 5100
+    image: "myflask"
+    command: ["python3", "./api_flask.py"]
+    restart: unless-stopped
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+  
+  elasticsearch_exporter:
+    image: justwatch/elasticsearch_exporter:1.0.2
+    command:
+      - '-es.uri=http://10.128.0.4:9200'
+    restart: unless-stopped
+    ports:
+      - "9108:9108"
+    expose:
+      - 9108
+    networks:
+      - monitor-net
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=1d'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    restart: unless-stopped
+    expose:
+      - 9090
+    ports:
+      - 9090:9090
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+
